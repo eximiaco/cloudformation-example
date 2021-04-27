@@ -1,0 +1,34 @@
+[
+    {
+        "ParameterKey": "Environment",
+        "ParameterValue": "prd"
+    },
+    {
+        "ParameterKey": "VpcCIDR",
+        "ParameterValue": "172.16.0.0/16"
+    },
+    {
+        "ParameterKey": "PublicSubnetACIDR",
+        "ParameterValue": "172.16.0.0/24"
+    },
+    {
+        "ParameterKey": "PublicSubnetBCIDR",
+        "ParameterValue": "172.16.1.0/24"
+    },
+    {
+        "ParameterKey": "PrivateSubnetACIDR",
+        "ParameterValue": "172.16.2.0/24"
+    },
+    {
+        "ParameterKey": "PrivateSubnetBCIDR",
+        "ParameterValue": "172.16.3.0/24"
+    },
+    {
+        "ParameterKey": "BastionKeyName",
+        "ParameterValue": "Bastion"
+    },
+    {
+        "ParameterKey": "BastionAccessCIDR",
+        "ParameterValue": "0.0.0.0/0"
+    }
+]

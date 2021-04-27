@@ -1,0 +1,357 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: >
+    Network stack for application.
+    Author: Douglas Picolotto <douglas.picolotto@eximia.co>
+
+Parameters:
+  Application:
+    Description: Application name
+    Type: String
+    AllowedPattern: "[a-z0-9]+"
+
+  Environment:
+    Description: Environment name
+    Type: String
+    AllowedPattern: "[a-z]+"
+
+  VpcCIDR:
+    Description: VPC [CIDR].
+    Type: String
+
+  PublicSubnetACIDR:
+    Description: Public Subnet A [CIDR].
+    Type: String
+
+  PublicSubnetBCIDR:
+    Description: Public Subnet B [CIDR].
+    Type: String
+
+  PrivateSubnetACIDR:
+    Description: Private Subnet A [CIDR].
+    Type: String
+
+  PrivateSubnetBCIDR:
+    Description: Private Subnet B [CIDR].
+    Type: String  
+
+  BastionKeyName:
+    Description: Name of an existing EC2 KeyPair to enable SSH access to the Bastion Instance
+    Type: AWS::EC2::KeyPair::KeyName
+  
+  BastionAccessCIDR:
+    Description: The address range that will access the bastion host [CIDR].
+    Type: String 
+
+Mappings:
+  AMI:
+    eu-north-1: 
+      Id: ami-0afad43e7d620260c
+    ap-south-1: 
+      Id: ami-04bde106886a53080
+    eu-west-3: 
+      Id: ami-06602da18c878f98d
+    eu-west-2: 
+      Id: ami-09a56048b08f94cdf
+    eu-west-1: 
+      Id: ami-0943382e114f188e8
+    ap-northeast-3: 
+      Id: ami-092faff259afb9a26
+    ap-northeast-2: 
+      Id: ami-0ba5cd124d7a79612
+    ap-northeast-1: 
+      Id: ami-0fe22bffdec36361c
+    sa-east-1: 
+      Id: ami-05aa753c043f1dcd3
+    ca-central-1: 
+      Id: ami-0e28822503eeedddc
+    ap-southeast-1: 
+      Id: ami-055147723b7bca09a
+    ap-southeast-2: 
+      Id: ami-0f39d06d145e9bb63
+    eu-central-1: 
+      Id: ami-0b1deee75235aa4bb
+    us-east-1: 
+      Id: ami-0747bdcabd34c712a
+    us-east-2: 
+      Id: ami-0b9064170e32bde34
+    us-west-1: 
+      Id: ami-07b068f843ec78e72
+    us-west-2:  
+      Id: ami-090717c950a5c34d3
+
+Resources:
+##### VPC ####
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCIDR
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${Application}-${Environment}-vpc
+        - Key: Environment
+          Value: !Ref Environment
+  
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${Application}-${Environment}-internetgateway
+        - Key: Environment
+          Value: !Ref Environment
+
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+##### PUBLIC SUBNET ####
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      MapPublicIpOnLaunch: false
+      AvailabilityZone: !Select [ 0, !GetAZs ]
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PublicSubnetACIDR
+      Tags:
+        - Key: Name
+          Value: !Sub ${Application}-${Environment}-public-subnet-a
+        - Key: Environment
+          Value: !Ref Environment
+  
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      MapPublicIpOnLaunch: false
+      AvailabilityZone: !Select [ 1, !GetAZs ]
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PublicSubnetBCIDR
+      Tags:
+        - Key: Name
+          Value: !Sub ${Application}-${Environment}-public-subnet-b
+        - Key: Environment
+          Value: !Ref Environment
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${Application}-${Environment}-public-routetable
+        - Key: Environment
+          Value: !Ref Environment
+          
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetRouteTableAAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnetRouteTableBAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetB
+      RouteTableId: !Ref PublicRouteTable
+
+##### NAT ####
+  NatGatewayAElasticIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${Application}-${Environment}-natgateway-eip-a
+        - Key: Environment
+          Value: !Ref Environment
+
+  NatGatewayA:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGatewayAElasticIP.AllocationId
+      SubnetId: !Ref PublicSubnetA
+      Tags:
+        - Key: Name
+          Value: !Sub ${Application}-${Environment}-nat-gateway-a
+        - Key: Environment
+          Value: !Ref Environment
+
+  NatGatewayBElasticIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${Application}-${Environment}-nat-gateway-eip-b
+        - Key: Environment
+          Value: !Ref Environment
+
+  NatGatewayB:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGatewayBElasticIP.AllocationId
+      SubnetId: !Ref PublicSubnetB
+      Tags:
+        - Key: Name
+          Value: !Sub ${Application}-${Environment}-nat-gateway-b
+        - Key: Environment
+          Value: !Ref Environment
+
+##### PRIVATE SUBNET ####
+
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      MapPublicIpOnLaunch: false
+      AvailabilityZone: !Select [ 0, !GetAZs ]
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PrivateSubnetACIDR
+      Tags:
+        - Key: Name
+          Value: !Sub ${Application}-${Environment}-private-subnet-a
+        - Key: Environment
+          Value: !Ref Environment
+  
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      MapPublicIpOnLaunch: false
+      AvailabilityZone: !Select [ 1, !GetAZs ]
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PrivateSubnetBCIDR
+      Tags:
+        - Key: Name
+          Value: !Sub ${Application}-${Environment}-private-subnet-b
+        - Key: Environment
+          Value: !Ref Environment
+
+  PrivateRouteTableA:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${Application}-${Environment}-private-routetable-a
+        - Key: Environment
+          Value: !Ref Environment
+  
+  NatGatewayPrivateRouteA:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableA
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGatewayA
+
+  PrivateRouteTableB:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${Application}-${Environment}-private-routetable-b
+        - Key: Environment
+          Value: !Ref Environment
+
+  NatGatewayPrivateRouteB:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableB
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGatewayB
+
+  PrivateSubnetRouteTableAssociationA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetA
+      RouteTableId: !Ref PrivateRouteTableA
+
+  PrivateSubnetRouteTableAssociationB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetB
+      RouteTableId: !Ref PrivateRouteTableB
+
+##### BASTION ####
+  BastionSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: !Ref VPC
+      GroupName: !Sub ${Application}-${Environment}-bastion-sg
+      GroupDescription: !Sub ${Application} bastion host security group
+      SecurityGroupIngress:      
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref BastionAccessCIDR
+          Description: FROM SPECIFIC RANGE    
+      Tags:
+        - Key: Name
+          Value: !Sub ${Application}-${Environment}-bastion-securitygroup
+        - Key: Environment
+          Value: !Ref Environment
+
+  BastionElasticIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  BastionInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t3.micro
+      KeyName: !Ref BastionKeyName
+      ImageId: !FindInMap [AMI, !Ref AWS::Region, Id]
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: false
+          DeviceIndex: 0
+          DeleteOnTermination: true
+          GroupSet:
+            - !Ref BastionSecurityGroup
+          SubnetId: !Ref PublicSubnetA
+      Tags:
+        - Key: Name
+          Value: !Sub ${Application}-${Environment}-bastion-instance
+        - Key: Environment
+          Value: !Sub ${Environment}
+
+  BastionIPAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Properties: 
+      AllocationId: !GetAtt BastionElasticIP.AllocationId
+      InstanceId: !Ref BastionInstance
+
+Outputs:
+  VPCId:
+    Value: !Ref VPC
+    Export:
+      Name: !Sub ${Application}-${Environment}-vpc-id
+
+  PrivateSubnetAId:
+    Value: !Ref PrivateSubnetA
+    Export:
+      Name: !Sub ${Application}-${Environment}-private-subnet-a-id
+
+  PrivateSubnetBId:
+    Value: !Ref PrivateSubnetB
+    Export:
+      Name: !Sub ${Application}-${Environment}-private-subnet-b-id
+
+  PublicSubnetAId:
+    Value: !Ref PublicSubnetA
+    Export:
+      Name: !Sub ${Application}-${Environment}-public-subnet-a-id
+
+  PublicSubnetBId:
+    Value: !Ref PublicSubnetB
+    Export:
+      Name: !Sub ${Application}-${Environment}-public-subnet-b-id

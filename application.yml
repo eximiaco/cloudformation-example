@@ -1,0 +1,239 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: >
+    Application stack for application.
+    Author: Douglas Picolotto <douglas.picolotto@eximia.co>
+
+Parameters:
+  Application:
+    Description: Application name
+    Type: String
+    AllowedPattern: "[a-z0-9]+"
+
+  Environment:
+    Description: Environment name
+    Type: String
+    AllowedPattern: "[a-z]+"
+
+  InstanceType:
+    Description: Launch Configuration - Instance Type
+    Type: String
+    Default: t3.small
+    AllowedValues:
+      - t3.small
+      - t3.medium
+      - t3.large
+
+Mappings:
+  AMI:
+    eu-north-1: 
+      Id: ami-0afad43e7d620260c
+    ap-south-1: 
+      Id: ami-04bde106886a53080
+    eu-west-3: 
+      Id: ami-06602da18c878f98d
+    eu-west-2: 
+      Id: ami-09a56048b08f94cdf
+    eu-west-1: 
+      Id: ami-0943382e114f188e8
+    ap-northeast-3: 
+      Id: ami-092faff259afb9a26
+    ap-northeast-2: 
+      Id: ami-0ba5cd124d7a79612
+    ap-northeast-1: 
+      Id: ami-0fe22bffdec36361c
+    sa-east-1: 
+      Id: ami-05aa753c043f1dcd3
+    ca-central-1: 
+      Id: ami-0e28822503eeedddc
+    ap-southeast-1: 
+      Id: ami-055147723b7bca09a
+    ap-southeast-2: 
+      Id: ami-0f39d06d145e9bb63
+    eu-central-1: 
+      Id: ami-0b1deee75235aa4bb
+    us-east-1: 
+      Id: ami-0747bdcabd34c712a
+    us-east-2: 
+      Id: ami-0b9064170e32bde34
+    us-west-1: 
+      Id: ami-07b068f843ec78e72
+    us-west-2:  
+      Id: ami-090717c950a5c34d3
+
+Resources:
+  ASGInstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId:
+        Fn::ImportValue: !Sub ${Application}-${Environment}-vpc-id
+      GroupName: !Sub ${Application}-${Environment}-asg-sg
+      GroupDescription: !Sub ${Application} asg security group
+      Tags:
+        - Key: Name
+          Value: !Sub ${Application}-${Environment}-asg-securitygroup
+        - Key: Environment
+          Value: !Ref Environment
+
+  ASGSecurityGroupIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties: 
+      Description: FROM ALB
+      FromPort: 80
+      GroupId: !Ref ASGInstanceSecurityGroup
+      IpProtocol: tcp
+      SourceSecurityGroupId: !Ref ALBSecurityGroup
+      ToPort: 80
+
+  ASGInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${Application}-${Environment}-asg-instance-role
+      AssumeRolePolicyDocument: 
+        Version: 2012-10-17
+        Statement: 
+          - Effect: Allow
+            Principal: 
+              Service: 
+                - ec2.amazonaws.com
+            Action: 
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess
+
+  ASGInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /
+      Roles:
+        - !Ref ASGInstanceRole
+
+  ASGLaunchConfiguration:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties: 
+      LaunchConfigurationName: !Sub ${Application}-${Environment}-asg-launchconfiguration
+      ImageId: !FindInMap [AMI, !Ref "AWS::Region", Id]
+      InstanceType: !Ref InstanceType
+      IamInstanceProfile: !Ref ASGInstanceProfile
+      SecurityGroups: 
+        - !Ref ASGInstanceSecurityGroup
+      BlockDeviceMappings: 
+        - DeviceName: /dev/sda1
+          Ebs: 
+            VolumeSize: 10
+            VolumeType: "gp2"
+      UserData:
+        !Base64 |
+          #!/bin/bash
+          apt-get update -y
+          apt-get install apache2 -y
+          systemctl start apache2.service
+          cd /var/www/html
+          echo "Hello world, it works!" > index.html
+
+  ASGTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 30
+      HealthCheckPath: /
+      HealthCheckPort: traffic-port
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 5
+      Name: !Sub ${Application}-${Environment}-asg-targetgroup
+      Port: 80
+      Protocol: HTTP
+      TargetType: instance
+      UnhealthyThresholdCount: 2
+      Matcher:
+        HttpCode: 200
+      VpcId:
+        Fn::ImportValue: !Sub ${Application}-${Environment}-vpc-id
+
+  ASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:     
+      AutoScalingGroupName: !Sub ${Application}-${Environment}-asg
+      LaunchConfigurationName: !Ref ASGLaunchConfiguration
+      DesiredCapacity: 1
+      HealthCheckGracePeriod: 60
+      HealthCheckType: ELB
+      MaxSize: 4
+      MinSize: 1
+      TargetGroupARNs: 
+        - !Ref ASGTargetGroup
+      VPCZoneIdentifier: 
+        - Fn::ImportValue: !Sub ${Application}-${Environment}-private-subnet-a-id
+        - Fn::ImportValue: !Sub ${Application}-${Environment}-private-subnet-b-id
+      Tags:
+        - Key: Name
+          Value: !Sub ${Application}-${Environment}-asg
+          PropagateAtLaunch: true
+        - Key: Environment
+          Value: !Ref Environment
+          PropagateAtLaunch: true
+
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: 
+        Fn::ImportValue: !Sub ${Application}-${Environment}-vpc-id
+      GroupName: !Sub ${Application}-${Environment}-alb-sg
+      GroupDescription: !Sub ${Application} alb security group
+      SecurityGroupIngress:      
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: FROM INTERNET
+      SecurityGroupEgress:      
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          DestinationSecurityGroupId: !Ref ASGInstanceSecurityGroup
+          Description: TO ASG
+      Tags:
+        - Key: Name
+          Value: !Sub ${Application}-${Environment}-alb-securitygroup
+        - Key: Environment
+          Value: !Ref Environment
+
+  ALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub ${Application}-${Environment}-alb
+      Scheme: internet-facing
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+      Type: application
+      IpAddressType: ipv4
+      Subnets:
+        - Fn::ImportValue: !Sub ${Application}-${Environment}-public-subnet-a-id
+        - Fn::ImportValue: !Sub ${Application}-${Environment}-public-subnet-b-id
+      Tags:
+        - Key: Name
+          Value: !Sub ${Application}-${Environment}-alb
+        - Key: Environment
+          Value: !Ref Environment
+
+  ALBHTTPListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    DependsOn:
+      - ASGTargetGroup
+    Properties:
+      DefaultActions:
+        - Type: forward
+          Order: 1
+          ForwardConfig:
+            TargetGroups:
+              - TargetGroupArn: !Ref ASGTargetGroup
+      LoadBalancerArn: !Ref ALB
+      Port: 80
+      Protocol: HTTP
+
+Outputs:
+  ALBDNS:
+    Value: 
+      Fn::Sub:
+        - "http://${DNS}"
+        - DNS: !GetAtt ALB.DNSName
+    
